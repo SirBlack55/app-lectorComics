@@ -1,0 +1,137 @@
+import JSZip from "jszip";
+import { createId } from "./id";
+import type { ComicRecord, ComicSource } from "../types";
+
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif"];
+
+function sortNaturally(values: string[]): string[] {
+  return [...values].sort((a, b) => {
+    return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+  });
+}
+
+function fileToDataUrl(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function createComicRecord(title: string, pages: string[], source: ComicSource): ComicRecord {
+  return {
+    id: createId(),
+    title,
+    source,
+    cover: pages[0],
+    pages,
+    createdAt: new Date().toISOString(),
+    progress: { currentPage: 0 }
+  };
+}
+
+async function canvasToDataUrl(canvas: HTMLCanvasElement): Promise<string> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error("No se pudo convertir una pagina del PDF."));
+          return;
+        }
+        void fileToDataUrl(blob).then(resolve, reject);
+      },
+      "image/jpeg",
+      0.92
+    );
+  });
+}
+
+export async function importImageBatch(files: FileList | File[]): Promise<ComicRecord> {
+  const allFiles = Array.from(files);
+  const imageFiles = sortNaturally(
+    allFiles
+      .filter((file) => file.type.startsWith("image/"))
+      .map((file) => file.name)
+  ).map((name) => allFiles.find((file) => file.name === name)!);
+
+  if (imageFiles.length === 0) {
+    throw new Error("Selecciona imagenes validas para crear un comic.");
+  }
+
+  const pages = await Promise.all(imageFiles.map((file) => fileToDataUrl(file)));
+  const firstName = imageFiles[0].name.split(".")[0] || "Nuevo comic";
+
+  return createComicRecord(firstName, pages, "images");
+}
+
+export async function importCbz(file: File): Promise<ComicRecord> {
+  const zip = await JSZip.loadAsync(file);
+  const entries = Object.keys(zip.files)
+    .filter((entryName) => IMAGE_EXTENSIONS.some((ext) => entryName.toLowerCase().endsWith(ext)))
+    .filter((entryName) => !zip.files[entryName].dir);
+
+  const sortedEntries = sortNaturally(entries);
+
+  if (sortedEntries.length === 0) {
+    throw new Error("El CBZ no contiene imagenes legibles.");
+  }
+
+  const pages = await Promise.all(
+    sortedEntries.map(async (entryName) => {
+      const blob = await zip.files[entryName].async("blob");
+      return fileToDataUrl(blob);
+    })
+  );
+
+  return createComicRecord(file.name.replace(/\.cbz$/i, ""), pages, "cbz");
+}
+
+export async function importPdf(file: File): Promise<ComicRecord> {
+  const [{ GlobalWorkerOptions, getDocument }, workerModule] = await Promise.all([
+    import("pdfjs-dist/legacy/build/pdf.mjs"),
+    import("pdfjs-dist/legacy/build/pdf.worker.min.mjs?url")
+  ]);
+  GlobalWorkerOptions.workerSrc = workerModule.default;
+
+  const buffer = await file.arrayBuffer();
+  const loadingTask = getDocument({ data: buffer });
+  const pdf = await loadingTask.promise;
+  const pages: string[] = [];
+
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const maxWidth = 1600;
+      const scale = Math.min(2, maxWidth / baseViewport.width);
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        throw new Error("No se pudo preparar el render del PDF.");
+      }
+
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+
+      await page.render({
+        canvas,
+        canvasContext: context,
+        viewport
+      }).promise;
+
+      pages.push(await canvasToDataUrl(canvas));
+      page.cleanup();
+    }
+  } finally {
+    await loadingTask.destroy();
+  }
+
+  if (pages.length === 0) {
+    throw new Error("El PDF no contiene paginas legibles.");
+  }
+
+  return createComicRecord(file.name.replace(/\.pdf$/i, ""), pages, "pdf");
+}
