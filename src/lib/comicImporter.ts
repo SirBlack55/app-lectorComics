@@ -120,7 +120,7 @@ export async function importCbr(file: File): Promise<ComicRecord> {
       if (!bytes) {
         throw new Error(`No se pudo extraer la pagina "${name}" del CBR.`);
       }
-      return fileToDataUrl(new Blob([bytes]));
+      return fileToDataUrl(new Blob([new Uint8Array(bytes)]));
     })
   );
 
