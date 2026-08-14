@@ -1,4 +1,6 @@
 import JSZip from "jszip";
+import { createExtractorFromData } from "node-unrar-js/esm";
+import unrarWasmUrl from "node-unrar-js/esm/js/unrar.wasm?url";
 import { createId } from "./id";
 import type { ComicRecord, ComicSource } from "../types";
 
@@ -85,6 +87,44 @@ export async function importCbz(file: File): Promise<ComicRecord> {
   );
 
   return createComicRecord(file.name.replace(/\.cbz$/i, ""), pages, "cbz");
+}
+
+export async function importCbr(file: File): Promise<ComicRecord> {
+  const [data, wasmBinary] = await Promise.all([
+    file.arrayBuffer(),
+    fetch(unrarWasmUrl).then((response) => response.arrayBuffer())
+  ]);
+
+  const extractor = await createExtractorFromData({ data, wasmBinary });
+
+  const fileList = extractor.getFileList();
+  const imageNames = [...fileList.fileHeaders]
+    .filter((header) => !header.flags.directory)
+    .map((header) => header.name)
+    .filter((name) => IMAGE_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext)));
+
+  if (imageNames.length === 0) {
+    throw new Error("El CBR no contiene imagenes legibles.");
+  }
+
+  const sortedNames = sortNaturally(imageNames);
+
+  const extracted = extractor.extract({ files: sortedNames });
+  const entryByName = new Map(
+    [...extracted.files].map((entry) => [entry.fileHeader.name, entry.extraction])
+  );
+
+  const pages = await Promise.all(
+    sortedNames.map(async (name) => {
+      const bytes = entryByName.get(name);
+      if (!bytes) {
+        throw new Error(`No se pudo extraer la pagina "${name}" del CBR.`);
+      }
+      return fileToDataUrl(new Blob([bytes]));
+    })
+  );
+
+  return createComicRecord(file.name.replace(/\.cbr$/i, ""), pages, "cbr");
 }
 
 export async function importPdf(file: File): Promise<ComicRecord> {

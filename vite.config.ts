@@ -9,6 +9,9 @@ export default defineConfig({
     VitePWA({
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "apple-touch-icon.png"],
+      workbox: {
+        globPatterns: ["**/*.{js,css,html,ico,png,svg,webmanifest,wasm}"]
+      },
       manifest: {
         id: "/app-lectorComics/",
         lang: "es",

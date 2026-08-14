@@ -1,4 +1,4 @@
-export type ComicSource = "cbz" | "images" | "pdf";
+export type ComicSource = "cbz" | "cbr" | "images" | "pdf";
 
 export interface ReaderProgress {
   currentPage: number;

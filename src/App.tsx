@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { PageFlip } from "page-flip/dist/js/page-flip.module.js";
-import { importCbz, importImageBatch, importPdf } from "./lib/comicImporter";
+import { importCbr, importCbz, importImageBatch, importPdf } from "./lib/comicImporter";
 import { useLibrary } from "./hooks/useLibrary";
 import type { ComicRecord } from "./types";
 
-type ImportMode = "cbz" | "images" | "pdf";
+type ImportMode = "cbz" | "cbr" | "images" | "pdf";
 type ReaderMode = "single" | "spread";
 
 function getPreferredReaderMode(): ReaderMode {
@@ -144,6 +144,7 @@ function App() {
   const [readerMode, setReaderMode] = useState<ReaderMode>("single");
   const [statusMessage, setStatusMessage] = useState("Listo para importar.");
   const cbzInputRef = useRef<HTMLInputElement | null>(null);
+  const cbrInputRef = useRef<HTMLInputElement | null>(null);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const imagesInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -183,9 +184,11 @@ function App() {
       const comic =
         mode === "cbz"
           ? await importCbz(files[0])
-          : mode === "pdf"
-            ? await importPdf(files[0])
-            : await importImageBatch(files);
+          : mode === "cbr"
+            ? await importCbr(files[0])
+            : mode === "pdf"
+              ? await importPdf(files[0])
+              : await importImageBatch(files);
       await upsertComic(comic);
       setActiveComic(comic);
       setStatusMessage(`"${comic.title}" ya esta en tu biblioteca.`);
@@ -253,6 +256,9 @@ function App() {
             <button type="button" className="primary-button" onClick={() => cbzInputRef.current?.click()}>
               Importar CBZ
             </button>
+            <button type="button" className="primary-button" onClick={() => cbrInputRef.current?.click()}>
+              Importar CBR
+            </button>
             <button type="button" className="secondary-button" onClick={() => imagesInputRef.current?.click()}>
               Importar imagenes
             </button>
@@ -271,6 +277,13 @@ function App() {
             accept=".cbz,application/vnd.comicbook+zip,application/zip"
             hidden
             onChange={(event) => void handleImport("cbz", event.target.files)}
+          />
+          <input
+            ref={cbrInputRef}
+            type="file"
+            accept=".cbr,application/vnd.comicbook-rar,application/x-rar-compressed,application/x-rar"
+            hidden
+            onChange={(event) => void handleImport("cbr", event.target.files)}
           />
           <input
             ref={imagesInputRef}
