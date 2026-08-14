@@ -21,6 +21,40 @@ function fileToDataUrl(file: File | Blob): Promise<string> {
   });
 }
 
+async function readMagicBytes(file: File, length: number): Promise<Uint8Array> {
+  const buffer = await file.slice(0, length).arrayBuffer();
+  return new Uint8Array(buffer);
+}
+
+function looksLikeZip(bytes: Uint8Array): boolean {
+  return bytes[0] === 0x50 && bytes[1] === 0x4b;
+}
+
+function looksLikeRar(bytes: Uint8Array): boolean {
+  // Firma "Rar!" + 0x1A 0x07, comun a RAR4 y RAR5.
+  return bytes[0] === 0x52 && bytes[1] === 0x61 && bytes[2] === 0x72 && bytes[3] === 0x21 && bytes[4] === 0x1a && bytes[5] === 0x07;
+}
+
+async function extractZipPages(file: File | Blob): Promise<string[]> {
+  const zip = await JSZip.loadAsync(file);
+  const entries = Object.keys(zip.files)
+    .filter((entryName) => IMAGE_EXTENSIONS.some((ext) => entryName.toLowerCase().endsWith(ext)))
+    .filter((entryName) => !zip.files[entryName].dir);
+
+  const sortedEntries = sortNaturally(entries);
+
+  if (sortedEntries.length === 0) {
+    throw new Error("El archivo no contiene imagenes legibles.");
+  }
+
+  return Promise.all(
+    sortedEntries.map(async (entryName) => {
+      const blob = await zip.files[entryName].async("blob");
+      return fileToDataUrl(blob);
+    })
+  );
+}
+
 function createComicRecord(title: string, pages: string[], source: ComicSource): ComicRecord {
   return {
     id: createId(),
@@ -68,28 +102,26 @@ export async function importImageBatch(files: FileList | File[]): Promise<ComicR
 }
 
 export async function importCbz(file: File): Promise<ComicRecord> {
-  const zip = await JSZip.loadAsync(file);
-  const entries = Object.keys(zip.files)
-    .filter((entryName) => IMAGE_EXTENSIONS.some((ext) => entryName.toLowerCase().endsWith(ext)))
-    .filter((entryName) => !zip.files[entryName].dir);
-
-  const sortedEntries = sortNaturally(entries);
-
-  if (sortedEntries.length === 0) {
-    throw new Error("El CBZ no contiene imagenes legibles.");
-  }
-
-  const pages = await Promise.all(
-    sortedEntries.map(async (entryName) => {
-      const blob = await zip.files[entryName].async("blob");
-      return fileToDataUrl(blob);
-    })
-  );
-
+  const pages = await extractZipPages(file);
   return createComicRecord(file.name.replace(/\.cbz$/i, ""), pages, "cbz");
 }
 
 export async function importCbr(file: File): Promise<ComicRecord> {
+  const header = await readMagicBytes(file, 8);
+
+  // Muchos ".cbr" que circulan son en realidad ZIP mal renombrados.
+  // Los detectamos por firma real y los tratamos como CBZ en vez de fallar.
+  if (looksLikeZip(header)) {
+    const pages = await extractZipPages(file);
+    return createComicRecord(file.name.replace(/\.cbr$/i, ""), pages, "cbz");
+  }
+
+  if (!looksLikeRar(header)) {
+    throw new Error(
+      "El archivo no es un CBR (RAR) ni un ZIP validos. Puede estar corrupto o tener la extension incorrecta."
+    );
+  }
+
   const [data, wasmBinary] = await Promise.all([
     file.arrayBuffer(),
     fetch(unrarWasmUrl).then((response) => response.arrayBuffer())
